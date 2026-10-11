@@ -1,189 +1,321 @@
 import express from 'express';
 import { randomUUID } from 'node:crypto';
+import pool from './db/pool.js';
 const app = express();
 const PORT = 3000;
 app.use(express.json());
-let tasks = [
-{
-id: '11111111-1111-4111-8111-111111111111',
-title: 'Подготовить макет главной страницы',
-project: 'Учебный проект',
-status: 'В работе',
-priority: 'Высокий',
-dueDate: '2026-09-20',
-description: 'Сделать набросок основных блоков',
-},
-{
-id: '22222222-2222-4222-8222-222222222222',
-title: 'Разобраться с REST API',
-project: 'Обучение',
-status: 'Нужно сделать',
-priority: 'Средний',
-dueDate: '2026-09-25',
-description: 'Сделать самостоятельную работу',
-},
-{
-id: '33333333-3333-4333-8333-333333333333',
-title: 'Проверить запросы к серверу',
-project: 'TaskFlow',
-status: 'Готово',
-priority: 'Низкий',
-dueDate: '2026-09-18',
-description: 'Проверить работу',
-},
-];
 const allowedStatuses = [
-'Нужно сделать',
-'В работе',
-'Готово',
+  'Нужно сделать',
+  'В работе',
+  'Готово',
 ];
 const allowedPriorities = [
-'Низкий',
-'Средний',
-'Высокий',
+  'Низкий',
+  'Средний',
+  'Высокий',
 ];
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+function isUuid(value) {
+  return UUID_PATTERN.test(value);
+}
 function validateTask(data, partial = false) {
-const errors = [];
-if (!partial || data.title !== undefined) {
-if (typeof data.title !== 'string' || !data.title.trim()) {
-errors.push('Поле title обязательно');
-}
-}
-if (!partial || data.project !== undefined) {
-if (typeof data.project !== 'string' || !data.project.trim()) {
-errors.push('Поле project обязательно');
-}
-}
-if (
-data.status !== undefined &&
-!allowedStatuses.includes(data.status)
-) {
-errors.push('Недопустимый status');
-}
-if (
-data.priority !== undefined &&
-!allowedPriorities.includes(data.priority)
-) {
-errors.push('Недопустимый priority');
-}
-if (
-data.dueDate !== undefined &&
-typeof data.dueDate !== 'string'
-) {
-errors.push('Поле dueDate должно быть строкой');
-}
-if (partial && Object.keys(data).length === 0) {
-errors.push('Передайте хотя бы одно поле для изменения');
-}
-if (data.dueDate !== undefined) {
-  if (typeof data.dueDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(data.dueDate)) {
-    errors.push('Поле dueDate должно быть строкой в формате YYYY-MM-DD');
+  const errors = [];
+  if (!partial || data.title !== undefined) {
+    if (typeof data.title !== 'string' || !data.title.trim()) {
+      errors.push('Поле title обязательно');
+    }
   }
+  if (!partial || data.project !== undefined) {
+    if (typeof data.project !== 'string' || !data.project.trim()) {
+      errors.push('Поле project обязательно');
+    }
+  }
+  if (
+    data.status !== undefined &&
+    !allowedStatuses.includes(data.status)
+  ) {
+    errors.push('Недопустимый status');
+  }
+  if (
+    data.priority !== undefined &&
+    !allowedPriorities.includes(data.priority)
+  ) {
+    errors.push('Недопустимый priority');
+  }
+  if (
+    data.dueDate !== undefined &&
+    typeof data.dueDate !== 'string'
+  ) {
+    errors.push('Поле dueDate должно быть строкой');
+  }
+  if (partial && Object.keys(data).length === 0) {
+    errors.push('Передайте хотя бы одно поле для изменения');
+  }
+  return errors;
 }
-return errors;
-}
-app.get('/api/health', (req, res) => {
-res.json({ status: 'ok' });
+app.get('/api/health', async (req, res, next) => {
+  try {
+    const result = await pool.query(
+      'SELECT NOW() AS db_time'
+    );
+    res.json({
+      status: 'ok',
+      database: 'connected',
+      dbTime: result.rows[0].db_time,
+    });
+  } catch (error) {
+    next(error);
+  }
 });
-app.get('/api/tasks', (req, res) => {
-const { status, priority, project } = req.query;
-let result = tasks;
-if (status) {
-result = result.filter((task) => task.status === status);
-}
-if (priority) {
-result = result.filter(
-(task) => task.priority === priority
-);
-}
-if (project) { 
-result = result.filter(
-(task) => task.project === project
-);
-}
-res.json(result);
+app.get('/api/tasks', async (req, res, next) => {
+  try {
+    const { status, priority, project } = req.query;
+    const result = await pool.query(
+      `SELECT
+id,
+title,
+project,
+status,
+priority,
+description,
+due_date::text AS "dueDate",
+created_at AS "createdAt",
+updated_at AS "updatedAt"
+FROM tasks
+WHERE ($1::text IS NULL OR status = $1)
+AND ($2::text IS NULL OR priority = $2)
+AND ($3::text IS NULL OR project = $3)
+ORDER BY created_at DESC`,
+      [status ?? null, priority ?? null, project ?? null]
+    );
+    res.json(result.rows);
+  } catch (error) {
+    next(error);
+  }
 });
-app.get('/api/tasks/:id', (req, res) => {
-const task = tasks.find(
-(item) => item.id === req.params.id
-);
-if (!task) {
-return res.status(404).json({
-message: 'Задача не найдена',
+app.get('/api/tasks/:id', async (req, res, next) => {
+  try {
+    if (!isUuid(req.params.id)) {
+      return res.status(400).json({
+        message: 'Некорректный id задачи',
+      });
+    }
+    const result = await pool.query(
+      `SELECT
+id,
+title,
+project,
+status,
+priority,
+description,
+due_date::text AS "dueDate",
+created_at AS "createdAt",
+updated_at AS "updatedAt"
+FROM tasks
+WHERE id = $1`,
+      [req.params.id]
+    );
+    if (result.rowCount === 0) {
+      return res.status(404).json({
+        message: 'Задача не найдена',
+      });
+    }
+    res.json(result.rows[0]);
+  } catch (error) {
+    next(error);
+  }
 });
-}
-res.json(task);
+app.post('/api/tasks', async (req, res, next) => {
+  try {
+    const errors = validateTask(req.body);
+    if (errors.length > 0) {
+      return res.status(400).json({ errors });
+    }
+    const id = randomUUID();
+    const status = req.body.status ?? 'Нужно сделать';
+    const priority = req.body.priority ?? 'Средний';
+    const description = req.body.description || null;
+    const dueDate = req.body.dueDate || null;
+    const result = await pool.query(
+      `INSERT INTO tasks (
+id,
+title,
+project,
+status,
+priority,
+due_date,
+description
+)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING
+id,
+title,
+project,
+status,
+priority,
+description,
+due_date::text AS "dueDate",
+created_at AS "createdAt",
+updated_at AS "updatedAt"`,
+      [
+        id,
+        req.body.title.trim(),
+        req.body.project.trim(),
+        status,
+        priority,
+        dueDate,
+        description
+      ]
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    next(error);
+  }
 });
-app.post('/api/tasks', (req, res) => {
-const errors = validateTask(req.body);
-if (errors.length > 0) {
-return res.status(400).json({ errors });
-}
-const newTask = {
-id: randomUUID(),
-title: req.body.title.trim(),
-project: req.body.project.trim(),
-status: req.body.status ?? 'Нужно сделать',
-priority: req.body.priority ?? 'Средний',
-dueDate: req.body.dueDate ?? '',
-description: req.body.description !== undefined ? String(req.body.description).trim() : '',
-};
-tasks.unshift(newTask);
-res.status(201).json(newTask);
+app.patch('/api/tasks/:id', async (req, res, next) => {
+  try {
+    if (!isUuid(req.params.id)) {
+      return res.status(400).json({
+        message: 'Некорректный id задачи',
+      });
+    }
+    const errors = validateTask(req.body, true);
+    if (errors.length > 0) {
+      return res.status(400).json({ errors });
+    }
+    const currentResult = await pool.query(
+      `SELECT
+id,
+title,
+project,
+status,
+priority,
+description,
+due_date::text AS "dueDate"
+FROM tasks
+WHERE id = $1`,
+      [req.params.id]
+    );
+    if (currentResult.rowCount === 0) {
+      return res.status(404).json({
+        message: 'Задача не найдена',
+      });
+    }
+    const current = currentResult.rows[0];
+    const title = req.body.title !== undefined
+      ? req.body.title.trim()
+      : current.title;
+    const project = req.body.project !== undefined
+      ? req.body.project.trim()
+      : current.project;
+    const status = req.body.status ?? current.status;
+    const priority = req.body.priority ?? current.priority;
+    const description = req.body.description !== undefined 
+     ? req.body.description 
+     : current.description;
+    const dueDate = req.body.dueDate !== undefined
+      ? req.body.dueDate || null
+      : current.dueDate;
+    const result = await pool.query(
+      `UPDATE tasks
+SET
+title = $1,
+project = $2,
+status = $3,
+priority = $4,
+due_date = $5,
+description = $6,
+updated_at = NOW()
+WHERE id = $7
+RETURNING
+id,
+title,
+project,
+status,
+priority,
+description,
+due_date::text AS "dueDate",
+created_at AS "createdAt",
+updated_at AS "updatedAt"`,
+      [
+        title,
+        project,
+        status,
+        priority,
+        dueDate,
+        description,
+        req.params.id,
+      ]
+    );
+    res.json(result.rows[0]);
+  } catch (error) {
+    next(error);
+  }
 });
-app.patch('/api/tasks/:id', (req, res) => {
-const taskIndex = tasks.findIndex(
-(item) => item.id === req.params.id
-);
-if (taskIndex === -1) {
-return res.status(404).json({
-message: 'Задача не найдена',
+app.delete('/api/tasks/:id', async (req, res, next) => {
+  try {
+    if (!isUuid(req.params.id)) {
+      return res.status(400).json({
+        message: 'Некорректный id задачи',
+      });
+    }
+    const result = await pool.query(
+      'DELETE FROM tasks WHERE id = $1',
+      [req.params.id]
+    );
+    if (result.rowCount === 0) {
+      return res.status(404).json({
+        message: 'Задача не найдена',
+      });
+    }
+    res.status(204).send();
+  } catch (error) {
+    next(error);
+  }
 });
-}
-const errors = validateTask(req.body, true);
-if (errors.length > 0) {
-return res.status(400).json({ errors });
-}
-const currentTask = tasks[taskIndex];
-const updatedTask = {
-...currentTask,
-title: req.body.title !== undefined
-? req.body.title.trim()
-: currentTask.title,
-project: req.body.project !== undefined
-? req.body.project.trim()
-: currentTask.project,
-status: req.body.status ?? currentTask.status,
-priority: req.body.priority ?? currentTask.priority,
-dueDate: req.body.dueDate ?? currentTask.dueDate,
-description: req.body.description !== undefined ? String(req.body.description).trim() : currentTask.description
-};
-tasks[taskIndex] = updatedTask;
-res.json(updatedTask);
-});
-app.delete('/api/tasks/:id', (req, res) => {
-const taskIndex = tasks.findIndex(
-(item) => item.id === req.params.id
-);
-if (taskIndex === -1) {
-return res.status(404).json({
-message: 'Задача не найдена',
-});
-}
-tasks.splice(taskIndex, 1);
-res.status(204).send();
+app.get('/api/stats', async (req, res, next) => {
+  try {
+    const result = await pool.query(
+      `SELECT 
+         COUNT(*) AS total,
+         COUNT(CASE WHEN status = 'В работе' THEN 1 END) AS in_progress,
+         COUNT(CASE WHEN status = 'Готово' THEN 1 END) AS done
+       FROM tasks`
+    );
+    const stats = result.rows[0];
+    res.json({
+      total: parseInt(stats.total, 10),
+      in_progress: parseInt(stats.in_progress, 10),
+      done: parseInt(stats.done, 10)
+    });
+  } catch (error) {
+    next(error);
+  }
 });
 app.use((req, res) => {
-res.status(404).json({
-message: 'Endpoint не найден',
-});
+  res.status(404).json({
+    message: 'Endpoint не найден',
+  });
 });
 app.use((error, req, res, next) => {
-console.error(error);
-res.status(500).json({
-message: 'Внутренняя ошибка сервера',
-});
+  console.error(error);
+  const badDataCodes = [
+    '22P02',
+    '22007',
+    '22008',
+    '23502',
+    '23514',
+  ];
+  if (badDataCodes.includes(error.code)) {
+    return res.status(400).json({
+      message: 'База данных отклонила переданные данные',
+    });
+  }
+  res.status(500).json({
+    message: 'Внутренняя ошибка сервера',
+  });
 });
 app.listen(PORT, () => {
-console.log(`TaskFlow API: http://localhost:${PORT}`);
+  console.log(`TaskFlow API: http://localhost:${PORT}`);
 });
