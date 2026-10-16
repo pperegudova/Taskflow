@@ -1,8 +1,12 @@
 import express from 'express';
+import cors from 'cors';
 import { randomUUID } from 'node:crypto';
 import pool from './db/pool.js';
 const app = express();
 const PORT = 3000;
+app.use(cors({
+  origin: 'http://localhost:5173',
+}));
 app.use(express.json());
 const allowedStatuses = [
   'Нужно сделать',
@@ -211,9 +215,9 @@ WHERE id = $1`,
       : current.project;
     const status = req.body.status ?? current.status;
     const priority = req.body.priority ?? current.priority;
-    const description = req.body.description !== undefined 
-     ? req.body.description 
-     : current.description;
+    const description = req.body.description !== undefined
+      ? req.body.description
+      : current.description;
     const dueDate = req.body.dueDate !== undefined
       ? req.body.dueDate || null
       : current.dueDate;
