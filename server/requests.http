@@ -75,3 +75,19 @@ Content-Type: application/json
 {
   "description": "Добавлено новое описание через PATCH"
 }
+
+### Регистрация
+POST http://localhost:3000/api/auth/register
+Content-Type: application/json
+
+{
+"name": "Алексей",
+"email": "alexey@example.com",
+"password": "password123"
+}
+### Текущий пользователь
+GET http://localhost:3000/api/auth/me
+### Задачи текущего пользователя
+GET http://localhost:3000/api/tasks
+### Выход
+POST http://localhost:3000/api/auth/logout

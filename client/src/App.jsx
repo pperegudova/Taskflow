@@ -1,40 +1,60 @@
 import { useEffect, useState } from 'react';
-import { Route, Routes } from 'react-router-dom';
-import Sidebar from './components/Sidebar.jsx';
+import { Navigate, Route, Routes } from 'react-router-dom';
+
+import AppLayout from './components/AppLayout.jsx';
+import ProtectedRoute from './components/ProtectedRoute.jsx';
+import LoadingState from './components/LoadingState.jsx';
+
 import DashboardPage from './pages/DashboardPage.jsx';
 import TasksPage from './pages/TasksPage.jsx';
 import TaskDetailsPage from './pages/TaskDetailsPage.jsx';
+import ProfilePage from './pages/ProfilePage.jsx';
+import LoginPage from './pages/LoginPage.jsx';
+import RegisterPage from './pages/RegisterPage.jsx';
 import NotFoundPage from './pages/NotFoundPage.jsx';
+
+import { getCurrentUser, logoutUser } from './api/authApi.js';
 import {
     createTask,
     deleteTask,
     getTasks,
     updateTask,
 } from './api/tasksApi.js';
+
 export default function App() {
+    const [user, setUser] = useState(null);
+    const [authLoading, setAuthLoading] = useState(true);
     const [tasks, setTasks] = useState([]);
-    const [loading, setLoading] = useState(true);
+    const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
     const [search, setSearch] = useState('');
     const [statusFilter, setStatusFilter] = useState('Все');
     const [priorityFilter, setPriorityFilter] = useState('Все');
     const [isFormOpen, setIsFormOpen] = useState(false);
     const [editingTask, setEditingTask] = useState(null);
+
     useEffect(() => {
-        async function loadInitialTasks() {
-            setLoading(true);
-            setError('');
+        async function checkSession() {
             try {
-                const data = await getTasks();
-                setTasks(data);
-            } catch (requestError) {
-                setError(requestError.message);
+                const currentUser = await getCurrentUser();
+                setUser(currentUser);
+            } catch {
+                setUser(null);
             } finally {
-                setLoading(false);
+                setAuthLoading(false);
             }
         }
-        loadInitialTasks();
+        checkSession();
     }, []);
+
+    useEffect(() => {
+        if (!user) {
+            setTasks([]);
+            return;
+        }
+        reloadTasks();
+    }, [user]);
+
     async function reloadTasks() {
         setLoading(true);
         setError('');
@@ -47,36 +67,55 @@ export default function App() {
             setLoading(false);
         }
     }
+
     const filteredTasks = tasks.filter((task) => {
         const normalizedSearch = search.trim().toLowerCase();
         const matchesSearch =
             task.title.toLowerCase().includes(normalizedSearch) ||
             task.project.toLowerCase().includes(normalizedSearch);
-        const matchesStatus =
-            statusFilter === 'Все' || task.status === statusFilter;
+        const matchesStatus = statusFilter === 'Все' || task.status === statusFilter;
+        
+        // ВАШЕ ИЗМЕНЕНИЕ: Проверка приоритета
         const matchesPriority = priorityFilter === 'Все' || task.priority === priorityFilter;
+        
         return matchesSearch && matchesStatus && matchesPriority;
     });
+
+    function handleAuthenticated(currentUser) {
+        setUser(currentUser);
+        setTasks([]);
+    }
+
+    async function handleLogout() {
+        try {
+            await logoutUser();
+        } finally {
+            setUser(null);
+            setTasks([]);
+            setError('');
+        }
+    }
+
     function openCreateForm() {
         setEditingTask(null);
         setIsFormOpen(true);
     }
+
     function openEditForm(task) {
         setEditingTask(task);
         setIsFormOpen(true);
     }
+
     function closeForm() {
         setEditingTask(null);
         setIsFormOpen(false);
     }
+
     async function handleSaveTask(taskData) {
         setError('');
         try {
             if (editingTask) {
-                const updated = await updateTask(
-                    editingTask.id,
-                    taskData
-                );
+                const updated = await updateTask(editingTask.id, taskData);
                 setTasks((currentTasks) =>
                     currentTasks.map((task) =>
                         task.id === updated.id ? updated : task
@@ -91,11 +130,11 @@ export default function App() {
             setError(requestError.message);
         }
     }
+
     async function handleDeleteTask(taskId) {
         const confirmed = window.confirm('Удалить эту задачу?');
-        if (!confirmed) {
-            return;
-        }
+        if (!confirmed) return;
+        
         setError('');
         try {
             await deleteTask(taskId);
@@ -106,6 +145,7 @@ export default function App() {
             setError(requestError.message);
         }
     }
+
     async function handleStatusChange(taskId, status) {
         setError('');
         try {
@@ -119,11 +159,32 @@ export default function App() {
             setError(requestError.message);
         }
     }
+
+    if (authLoading) {
+        return (
+            <main className="authPage">
+                <LoadingState />
+            </main>
+        );
+    }
+
     return (
-        <div className="appShell">
-            <Sidebar />
-            <main className="content">
-                <Routes>
+        <Routes>
+            <Route
+                path="/login"
+                element={
+                    user ? <Navigate to="/" replace /> : <LoginPage onAuthenticated={handleAuthenticated} />
+                }
+            />
+            <Route
+                path="/register"
+                element={
+                    user ? <Navigate to="/" replace /> : <RegisterPage onAuthenticated={handleAuthenticated} />
+                }
+            />
+
+            <Route element={<ProtectedRoute user={user} />}>
+                <Route element={<AppLayout user={user} onLogout={handleLogout} />}>
                     <Route
                         path="/"
                         element={
@@ -154,7 +215,7 @@ export default function App() {
                                 onResetFilters={() => {
                                     setSearch('');
                                     setStatusFilter('Все');
-                                    setPriorityFilter('Все');
+                                    setPriorityFilter('Все'); 
                                 }}
                                 onCreateTask={openCreateForm}
                                 onEditTask={openEditForm}
@@ -168,13 +229,12 @@ export default function App() {
                             />
                         }
                     />
-                    <Route
-                        path="/tasks/:id"
-                        element={<TaskDetailsPage />}
-                    />
-                    <Route path="*" element={<NotFoundPage />} />
-                </Routes>
-            </main>
-        </div>
+                    <Route path="/tasks/:id" element={<TaskDetailsPage />} />
+                    <Route path="/profile" element={<ProfilePage />} />
+                </Route>
+            </Route>
+
+            <Route path="*" element={<NotFoundPage />} />
+        </Routes>
     );
 }
